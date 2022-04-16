@@ -5,6 +5,9 @@ The U-Net is a convolutional encoder-decoder neural network.
 # Imports
 import torch
 import torch.nn as nn
+from pytorch3dunet.unet3d.model import UNet3D
+from pytorch3dunet.unet3d.buildingblocks import DoubleConv as DC
+
 
 class UNet(nn.Module):
     """ UNet.
@@ -23,8 +26,8 @@ class UNet(nn.Module):
       UNet(merge_mode='add')
     """
 
-    def __init__(self, num_classes, in_channels=1, depth=5,
-                  mode="seg"):
+    def __init__(self, num_classes, in_channels=1, depth=4,
+                 mode="seg"):
         """ Init class.
 
         Parameters
@@ -50,15 +53,28 @@ class UNet(nn.Module):
             raise ValueError("'{}' is not a valid mode.".format(mode))
 
         # Declare class parameters
-        self.start_filts = 16 # Initial nb of kernels
+        self.start_filts = 16  # Initial nb of kernels
         self.down_mode = "maxpool"
         self.num_classes = num_classes
         self.in_channels = in_channels
         self.depth = depth
         self.down = []
-        self.up = [] # Useful in seg mode
-        self.classifier = None # Useful in classif mode
+        self.up = []  # Useful in seg mode
+        self.classifier = None  # Useful in classif mode
         self.name = "UNet_D%i_%s" % (self.depth, self.mode)
+
+        self.unet_3d_half = UNet3DHalf(in_channels=1,
+                                       out_channels=1,
+                                       final_sigmoid=True,
+                                       f_maps=16,  # control channel, default 64
+                                       layer_order="cbr",
+                                       num_groups=8,
+                                       num_levels=depth,
+                                       # if true, final activation determined by final_sigmoid. if false, no final activation
+                                       is_segmentation=True,
+                                       testing=True,  # if False, final activation is not applied
+                                       conv_padding=1,
+                                       )
 
         # Create the encoder pathway
         out_channels = 1
@@ -66,9 +82,10 @@ class UNet(nn.Module):
             in_channels = self.in_channels if cnt == 0 else out_channels
             out_channels = self.start_filts * (2**cnt)
             down_sampling = False if cnt == 0 else True
-            self.down.append(
-                Down(in_channels, out_channels, down_mode=self.down_mode,
-                     pooling=down_sampling, batchnorm=True))
+            # self.down.append(
+            #     Down(in_channels, out_channels, down_mode=self.down_mode,
+            #          pooling=down_sampling, batchnorm=True))
+            self.down.append(self.unet_3d_half.encoders[cnt])
 
         if self.mode == "seg":
             # Create the decoder pathway
@@ -80,10 +97,12 @@ class UNet(nn.Module):
                     Up(in_channels, out_channels, batchnorm=True))
 
         if self.mode == "classif":
-            self.classifier = Classifier(self.num_classes, features=self.start_filts * 2**(self.depth-1))
+            self.classifier = Classifier(
+                self.num_classes, features=self.start_filts * 2**(self.depth-1))
 
         elif self.mode == 'simCLR':
-            self.hidden_representation = nn.Linear(self.start_filts * (2**(self.depth-1)), 512)
+            self.hidden_representation = nn.Linear(
+                self.start_filts * (2**(self.depth-1)), 512)
             self.head_projection = nn.Linear(512, 128)
 
         # Add the list of modules to current module
@@ -102,13 +121,16 @@ class UNet(nn.Module):
         for module in self.modules():
             if isinstance(module, nn.ConvTranspose3d) or isinstance(module, nn.Conv3d):
                 nn.init.xavier_normal_(module.weight)
-                nn.init.constant_(module.bias, 0)
+                if module.bias != None:
+                    nn.init.constant_(module.bias, 0)
             elif isinstance(module, nn.BatchNorm2d):
                 nn.init.constant_(module.weight, 1)
-                nn.init.constant_(module.bias, 0)
+                if module.bias != None:
+                    nn.init.constant_(module.bias, 0)
             elif isinstance(module, nn.Linear):
                 nn.init.normal_(module.weight, 0, 0.01)
-                nn.init.constant_(module.bias, 0)
+                if module.bias != None:
+                    nn.init.constant_(module.bias, 0)
 
     def forward(self, x):
         encoder_outs = []
@@ -142,7 +164,7 @@ class UNet(nn.Module):
             x_classif = self.classifier(x_enc)
             return x_classif
 
-        raise ValueError("Unknown mode: %s"%self.mode)
+        raise ValueError("Unknown mode: %s" % self.mode)
 
 
 class Classifier(nn.Module):
@@ -150,8 +172,8 @@ class Classifier(nn.Module):
         super(Classifier, self).__init__()
         self.num_classes = nb_classes
         self.features = features
-        self.fc1 = nn.Linear(self.features, 1024, bias=True)
-        self.fc2 = nn.Linear(1024, self.num_classes, bias=True)
+        self.fc1 = nn.Linear(self.features, 256, bias=True)
+        self.fc2 = nn.Linear(256, self.num_classes, bias=True)
         self.relu = nn.LeakyReLU(inplace=True)
         self.avgpool = nn.AdaptiveAvgPool3d(1)
 
@@ -164,13 +186,13 @@ class Classifier(nn.Module):
 
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
-                 padding=1, bias=True, batchnorm=True):
+                 padding=1, bias=False, batchnorm=True):
         super(DoubleConv, self).__init__()
         self.batchnorm = batchnorm
         self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size,
-                    stride=stride, padding=padding, bias=bias)
+                               stride=stride, padding=padding, bias=bias)
         self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size,
-                    stride=stride, padding=padding, bias=bias)
+                               stride=stride, padding=padding, bias=bias)
         self.relu = nn.ReLU(inplace=True)
         if batchnorm:
             self.norm1 = nn.BatchNorm3d(out_channels)
@@ -203,6 +225,7 @@ class Down(nn.Module):
     A helper Module that performs 2 convolutions and 1 MaxPool.
     A ReLU activation and optionally a BatchNorm follows each convolution.
     """
+
     def __init__(self, in_channels, out_channels, pooling=True,
                  down_mode='maxpool', batchnorm=True):
         super(Down, self).__init__()
@@ -211,7 +234,8 @@ class Down(nn.Module):
         self.down_mode = down_mode
         if self.down_mode == "maxpool":
             self.maxpool = nn.MaxPool3d(2)
-            self.doubleconv = DoubleConv(in_channels, out_channels, batchnorm=batchnorm)
+            self.doubleconv = DoubleConv(
+                in_channels, out_channels, batchnorm=batchnorm)
 
     def forward(self, x):
         if self.pooling:
@@ -225,15 +249,58 @@ class Up(nn.Module):
     A helper Module that performs 2 convolutions and 1 UpConvolution.
     A ReLU activation and optionally a BatchNorm follows each convolution.
     """
+
     def __init__(self, in_channels, out_channels, up_mode="transpose",
                  batchnorm=True):
         super(Up, self).__init__()
         self.up_mode = up_mode
         self.upconv = UpConv(in_channels, out_channels)
-        self.doubleconv = DoubleConv(in_channels, out_channels, batchnorm=batchnorm)
+        self.doubleconv = DoubleConv(
+            in_channels, out_channels, batchnorm=batchnorm)
 
     def forward(self, x_down, x_up):
         x_down = self.upconv(x_down)
         x = torch.cat((x_up, x_down), dim=1)
         x = self.doubleconv(x)
         return x
+
+
+class UNet3DHalf(UNet3D):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        final_sigmoid=True,
+        f_maps=64,
+        layer_order="cbr",
+        num_groups=8,
+        num_levels=4,
+        is_segmentation=True,
+        testing=True,  # if False, final activation is not applied
+        conv_padding=1,
+        **kwargs,
+    ):
+        super(UNet3D, self).__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            final_sigmoid=final_sigmoid,
+            basic_module=DC,
+            f_maps=f_maps,
+            layer_order=layer_order,
+            num_groups=num_groups,
+            num_levels=num_levels,
+            is_segmentation=is_segmentation,
+            conv_padding=conv_padding,
+            testing=testing,
+            **kwargs,
+        )
+
+    def forward(self, x):
+        # encoder part
+        encoders_features = []
+        for encoder in self.encoders:
+            x = encoder(x)
+            # reverse the encoder outputs to be aligned with the decoder
+            encoders_features.insert(0, x)
+
+        return encoders_features

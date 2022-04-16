@@ -5,8 +5,6 @@ from tqdm import tqdm
 import logging
 
 
-
-
 class yAwareCLModel:
 
     def __init__(self, net, loss, loader_train, loader_val, config, scheduler=None):
@@ -24,7 +22,8 @@ class yAwareCLModel:
         self.logger = logging.getLogger("yAwareCL")
         self.loss = loss
         self.model = net
-        self.optimizer = torch.optim.Adam(net.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+        self.optimizer = torch.optim.Adam(
+            net.parameters(), lr=config.lr, weight_decay=config.weight_decay)
         self.scheduler = scheduler
         self.loader = loader_train
         self.loader_val = loader_val
@@ -45,49 +44,69 @@ class yAwareCLModel:
 
         for epoch in range(self.config.nb_epochs):
 
-            ## Training step
+            # Training step
             self.model.train()
             nb_batch = len(self.loader)
             training_loss = 0
             pbar = tqdm(total=nb_batch, desc="Training")
-            for (inputs, labels) in self.loader:
-                pbar.update()
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
-                self.optimizer.zero_grad()
-                z_i = self.model(inputs[:, 0, :])
-                z_j = self.model(inputs[:, 1, :])
-                batch_loss, logits, target = self.loss(z_i, z_j, labels)
-                batch_loss.backward()
-                self.optimizer.step()
-                training_loss += float(batch_loss) / nb_batch
-            pbar.close()
 
-            ## Validation step
-            nb_batch = len(self.loader_val)
-            pbar = tqdm(total=nb_batch, desc="Validation")
-            val_loss = 0
-            val_values = {}
-            with torch.no_grad():
-                self.model.eval()
-                for (inputs, labels) in self.loader_val:
+            if self.config.label_train != None:
+                for (inputs, labels) in self.loader:
                     pbar.update()
                     inputs = inputs.to(self.device)
-                    labels = labels.to(self.device)
+                    if labels != None:
+                        labels = labels.to(self.device)
+                    self.optimizer.zero_grad()
                     z_i = self.model(inputs[:, 0, :])
                     z_j = self.model(inputs[:, 1, :])
                     batch_loss, logits, target = self.loss(z_i, z_j, labels)
-                    val_loss += float(batch_loss) / nb_batch
-                    for name, metric in self.metrics.items():
-                        if name not in val_values:
-                            val_values[name] = 0
-                        val_values[name] += metric(logits, target) / nb_batch
+                    batch_loss.backward()
+                    self.optimizer.step()
+                    training_loss += float(batch_loss) / nb_batch
+            else:
+                for inputs in self.loader:
+                    pbar.update()
+                    inputs = inputs.to(self.device)
+                    self.optimizer.zero_grad()
+                    z_i = self.model(inputs[:, 0, :])
+                    z_j = self.model(inputs[:, 1, :])
+                    batch_loss, logits, target = self.loss(z_i, z_j, None)
+                    batch_loss.backward()
+                    self.optimizer.step()
+                    training_loss += float(batch_loss) / nb_batch
             pbar.close()
 
-            metrics = "\t".join(["Validation {}: {:.4f}".format(m, v) for (m, v) in val_values.items()])
-            print("Epoch [{}/{}] Training loss = {:.4f}\t Validation loss = {:.4f}\t".format(
-                epoch+1, self.config.nb_epochs, training_loss, val_loss)+metrics, flush=True)
+            if self.loader_val != None:
+                # Validation step
+                nb_batch = len(self.loader_val)
+                pbar = tqdm(total=nb_batch, desc="Validation")
+                val_loss = 0
+                val_values = {}
+                with torch.no_grad():
+                    self.model.eval()
+                    for (inputs, labels) in self.loader_val:
+                        pbar.update()
+                        inputs = inputs.to(self.device)
+                        labels = labels.to(self.device)
+                        z_i = self.model(inputs[:, 0, :])
+                        z_j = self.model(inputs[:, 1, :])
+                        batch_loss, logits, target = self.loss(
+                            z_i, z_j, labels)
+                        val_loss += float(batch_loss) / nb_batch
+                        for name, metric in self.metrics.items():
+                            if name not in val_values:
+                                val_values[name] = 0
+                            val_values[name] += metric(logits,
+                                                       target) / nb_batch
+                pbar.close()
 
+                metrics = "\t".join(["Validation {}: {:.4f}".format(
+                    m, v) for (m, v) in val_values.items()])
+                print("Epoch [{}/{}] Training loss = {:.4f}\t Validation loss = {:.4f}\t".format(
+                    epoch+1, self.config.nb_epochs, training_loss, val_loss)+metrics, flush=True)
+            else:
+                print("Epoch [{}/{}] Training loss = {:.4f}\t ".format(
+                    epoch+1, self.config.nb_epochs, training_loss), flush=True)
             if self.scheduler is not None:
                 self.scheduler.step()
 
@@ -99,13 +118,12 @@ class yAwareCLModel:
                     os.path.join(self.config.checkpoint_dir, "{name}_epoch_{epoch}.pth".
                                  format(name="y-Aware_Contrastive_MRI", epoch=epoch)))
 
-
     def fine_tuning(self):
         print(self.loss)
         print(self.optimizer)
 
         for epoch in range(self.config.nb_epochs):
-            ## Training step
+            # Training step
             self.model.train()
             nb_batch = len(self.loader)
             training_loss = []
@@ -116,13 +134,13 @@ class yAwareCLModel:
                 labels = labels.to(self.device)
                 self.optimizer.zero_grad()
                 y = self.model(inputs)
-                batch_loss = self.loss(y,labels)
+                batch_loss = self.loss(y, labels)
                 batch_loss.backward()
                 self.optimizer.step()
                 training_loss += float(batch_loss) / nb_batch
             pbar.close()
 
-            ## Validation step
+            # Validation step
             nb_batch = len(self.loader_val)
             pbar = tqdm(total=nb_batch, desc="Validation")
             val_loss = 0
@@ -143,29 +161,30 @@ class yAwareCLModel:
             if self.scheduler is not None:
                 self.scheduler.step()
 
-
     def load_model(self, path):
         checkpoint = None
         try:
-            checkpoint = torch.load(path, map_location=lambda storage, loc: storage)
+            checkpoint = torch.load(
+                path, map_location=lambda storage, loc: storage)
         except BaseException as e:
             self.logger.error('Impossible to load the checkpoint: %s' % str(e))
         if checkpoint is not None:
             try:
                 if hasattr(checkpoint, "state_dict"):
-                    unexpected = self.model.load_state_dict(checkpoint.state_dict())
-                    self.logger.info('Model loading info: {}'.format(unexpected))
+                    unexpected = self.model.load_state_dict(
+                        checkpoint.state_dict())
+                    self.logger.info(
+                        'Model loading info: {}'.format(unexpected))
                 elif isinstance(checkpoint, dict):
                     if "model" in checkpoint:
-                        unexpected = self.model.load_state_dict(checkpoint["model"], strict=False)
-                        self.logger.info('Model loading info: {}'.format(unexpected))
+                        unexpected = self.model.load_state_dict(
+                            checkpoint["model"], strict=False)
+                        self.logger.info(
+                            'Model loading info: {}'.format(unexpected))
                 else:
                     unexpected = self.model.load_state_dict(checkpoint)
-                    self.logger.info('Model loading info: {}'.format(unexpected))
+                    self.logger.info(
+                        'Model loading info: {}'.format(unexpected))
             except BaseException as e:
-                raise ValueError('Error while loading the model\'s weights: %s' % str(e))
-
-
-
-
-
+                raise ValueError(
+                    'Error while loading the model\'s weights: %s' % str(e))
