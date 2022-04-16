@@ -3,7 +3,9 @@ import torch
 from torch.nn import DataParallel
 from tqdm import tqdm
 import logging
-
+from matplotlib import pyplot as plt
+# import matplotlib
+# matplotlib.use("Qt5Agg")
 
 class yAwareCLModel:
 
@@ -74,6 +76,8 @@ class yAwareCLModel:
                     batch_loss.backward()
                     self.optimizer.step()
                     training_loss += float(batch_loss) / nb_batch
+                    # show_current_image(inputs[0, 0, :], inputs[0, 1, :])
+                    pbar.set_description("loss: {:4f}".format(float(batch_loss)), refresh=True)
             pbar.close()
 
             if self.loader_val != None:
@@ -188,3 +192,19 @@ class yAwareCLModel:
             except BaseException as e:
                 raise ValueError(
                     'Error while loading the model\'s weights: %s' % str(e))
+
+def show_current_image(fixed_data_x, fixed_data_x_mask, slice_position=60):
+    # Plot the real fixed image
+    plt.figure(figsize=(16, 16))
+    plt.subplot(1, 2, 1)
+    plt.axis("off")
+    plt.title("Real Fixed Original Image")
+    plt.imshow(fixed_data_x[0][slice_position, :, :].cpu().detach().numpy())
+
+    # Plot the real fixed image
+    plt.subplot(1, 2, 2)
+    plt.axis("off")
+    plt.title("Real Fixed Masked Image")
+    plt.imshow(fixed_data_x_mask[0][slice_position, :, :].cpu().detach().numpy())
+
+    plt.savefig("current_x.png")

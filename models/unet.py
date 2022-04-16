@@ -97,8 +97,10 @@ class UNet(nn.Module):
                     Up(in_channels, out_channels, batchnorm=True))
 
         if self.mode == "classif":
-            self.classifier = Classifier(
-                self.num_classes, features=self.start_filts * 2**(self.depth-1))
+            # self.classifier = Classifier(
+            #     self.num_classes, features=self.start_filts * 2**(self.depth-1))
+            topModel = TopModel()
+            self.classifier = FullModelSingle(self.unet_3d_half, topModel, base_trainable=False)
 
         elif self.mode == 'simCLR':
             self.hidden_representation = nn.Linear(
@@ -304,3 +306,89 @@ class UNet3DHalf(UNet3D):
             encoders_features.insert(0, x)
 
         return encoders_features
+
+# Create CNN Model
+class TopModel(nn.Module):
+    def __init__(self, in_channel=[16, 32, 64, 128]):
+        super(TopModel, self).__init__()
+        self.conv_layer1 = self._conv_layer_set(in_channel[0], 32, 3, 1)
+        self.conv_layer2 = self._conv_layer_set(in_channel[1] * 2, 64, 3, 1)
+        self.conv_layer3 = self._conv_layer_set(in_channel[2] * 2, 128, 3, 1)
+        self.conv_layer4 = self._conv_layer_set(in_channel[3] * 2, 16, 3, 1)
+        self.avg_pool = nn.AvgPool3d(3)
+        self.fc_layer = nn.Sequential(
+            # nn.Linear(128, 256),
+            nn.Linear(192, 256),  # for 121, 121, 145
+            nn.BatchNorm1d(256),
+            nn.LeakyReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
+            nn.LeakyReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(256, 1),
+            nn.Sigmoid(),
+        )
+        self.all_models = [
+            self.conv_layer1,
+            self.conv_layer2,
+            self.conv_layer3,
+            self.conv_layer4,
+            self.fc_layer,
+        ]
+
+    def _conv_layer_set(self, in_c, out_c, kernel_size=3, stride=1):
+        conv_layer = nn.Sequential(
+            nn.Conv3d(
+                in_c,
+                out_c,
+                kernel_size=(kernel_size, kernel_size, kernel_size),
+                padding=1,
+                stride=stride,
+            ),
+            nn.LeakyReLU(),
+            nn.MaxPool3d((2, 2, 2)),
+            nn.BatchNorm3d(out_c),
+        )
+        return conv_layer
+
+    def forward(self, x):
+        batch_size = x[0].shape[0]
+        # Set 1
+        out0 = self.conv_layer1(x[3])
+        out1 = self.conv_layer2(torch.cat([out0, x[2]], dim=1))
+        out2 = self.conv_layer3(torch.cat([out1, x[1]], dim=1))
+        out = self.conv_layer4(torch.cat([out2, x[0]], dim=1))
+        # print(out.shape)  # torch.Size([8, 16, 7, 7, 9])
+        out = self.avg_pool(out)
+        # print(out.shape)  # torch.Size([8, 16, 2, 2, 3])
+        out = out.view(out.size(0), -1)
+        # print(out.shape) # torch.Size([8, 192])
+        out = self.fc_layer(out)
+
+        return out
+
+    def reset_parameters(self):
+        for m in self.all_models:
+            for layer in m.children():
+                if hasattr(layer, "reset_parameters"):
+                    layer.reset_parameters()
+
+
+# Create CNN Model
+class FullModelSingle(nn.Module):
+    def __init__(self, base, top, base_trainable=True):
+        super(FullModelSingle, self).__init__()
+        self.base = base
+        self.top = top
+        self.base_trainable = base_trainable
+
+    def forward(self, x):
+        if self.base_trainable:
+            out = self.base(x)
+            out = self.top(out)
+        else:
+            with torch.no_grad():
+                out = self.base(x)
+            out = self.top(out)
+        return out

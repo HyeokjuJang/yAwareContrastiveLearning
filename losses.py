@@ -10,7 +10,7 @@ import numpy as np
 
 
 class GeneralizedSupervisedNTXenLoss(nn.Module):
-    def __init__(self, kernel='rbf', temperature=0.1, return_logits=False, sigma=0.0):
+    def __init__(self, kernel='rbf', temperature=0.1, return_logits=False, sigma=1.0):
         """
         :param kernel: a callable function f: [K, *] x [K, *] -> [K, K]
                                               y1, y2          -> f(y1, y2)
@@ -52,23 +52,22 @@ class GeneralizedSupervisedNTXenLoss(nn.Module):
         sim_zii = sim_zii - self.INF * torch.eye(N, device=z_i.device)
         sim_zjj = sim_zjj - self.INF * torch.eye(N, device=z_i.device)
 
-        if labels != None:
-            all_labels = labels.view(
-                N, -1).repeat(2, 1).detach().cpu().numpy()  # [2N, *]
-            weights = self.kernel(all_labels, all_labels)  # [2N, 2N]
-            weights = weights * (1 - np.eye(2*N))  # puts 0 on the diagonal
-            weights /= weights.sum(axis=1)
+        if labels == None:
+            labels = torch.zeros(N, device=z_i.device)
+
+        all_labels = labels.view(
+            N, -1).repeat(2, 1).detach().cpu().numpy()  # [2N, *]
+        weights = self.kernel(all_labels, all_labels)  # [2N, 2N]
+        weights = weights * (1 - np.eye(2*N))  # puts 0 on the diagonal
+        weights /= weights.sum(axis=1)
 
         # if 'rbf' kernel and sigma->0, we retrieve the classical NTXenLoss (without labels)
         sim_Z = torch.cat([torch.cat([sim_zii, sim_zij], dim=1), torch.cat(
             [sim_zij.T, sim_zjj], dim=1)], dim=0)  # [2N, 2N]
         log_sim_Z = func.log_softmax(sim_Z, dim=1)
 
-        if labels != None:
-            loss = -1./N * \
-                (torch.from_numpy(weights).to(z_i.device) * log_sim_Z).sum()
-        else:
-            loss = -1./N * (log_sim_Z).sum()
+        loss = -1./N * (torch.from_numpy(weights).to(z_i.device) * log_sim_Z).sum()
+
 
         correct_pairs = torch.arange(N, device=z_i.device).long()
 

@@ -188,7 +188,9 @@ class Flip(object):
     def __call__(self, arr):
         if self.axis is None:
             axis = np.random.randint(low=0, high=arr.ndim, size=1)[0]
-        return np.flip(arr, axis=(self.axis or axis))
+            return np.flip(arr, axis=(axis))
+        else:
+            return np.flip(arr, axis=(self.axis))
 
 
 class Blur(object):

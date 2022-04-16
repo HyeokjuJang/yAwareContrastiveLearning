@@ -21,7 +21,7 @@ class Config:
             self.lr = 1e-4
             self.weight_decay = 5e-5
             # Hyperparameters for our y-Aware InfoNCE Loss
-            self.sigma = 0.  # depends on the meta-data at hand
+            self.sigma = 1.  # depends on the meta-data at hand
             self.temperature = 0.1
             self.tf = "all_tf"
             self.model = "UNet"
@@ -42,8 +42,8 @@ class Config:
 
         elif self.mode == FINE_TUNING:
             # We assume a classification task here
-            self.batch_size = 8
-            self.nb_epochs_per_saving = 10
+            self.batch_size = 16
+            self.nb_epochs_per_saving = 1
             self.pin_mem = True
             self.num_cpu_workers = 1
             self.nb_epochs = 10
@@ -51,7 +51,18 @@ class Config:
             # Optimizer
             self.lr = 1e-4
             self.weight_decay = 5e-5
+            self.tf = None
 
-            self.pretrained_path = "/path/to/model.pth"
+            # Paths to the data
+            self.data_train = "D:\mri\dataset_121_121_145"
+            self.label_train = None
+
+            self.data_val = None
+            self.label_val = None
+
+            self.input_size = (1, 121, 121, 145)
+            self.label_name = "age"
+
+            self.pretrained_path = "workspace/y-Aware_Contrastive_MRI_epoch_7.pth"
             self.num_classes = 2
             self.model = "UNet"

@@ -17,7 +17,7 @@ class MRIDataset(Dataset):
         self.transforms.register(Normalize(), probability=1.0)
 
         if config.tf == "all_tf":
-            self.transforms.register(Flip(), probability=0.5)
+            self.transforms.register(Flip(1), probability=0.5)
             self.transforms.register(Blur(sigma=(0.1, 1)), probability=0.5)
             self.transforms.register(Noise(sigma=(0.1, 1)), probability=0.5)
             self.transforms.register(Cutout(patch_size=np.ceil(
